@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       bypass_security_gate:
-        description: "Bypass 30-minute security gate"
+        description: 'Bypass 30-minute security gate'
         type: boolean
         default: false
 permissions:
@@ -23,20 +23,19 @@ jobs:
         uses: cloudbees-io/jenkins-run-job@v2
         continue-on-error: true
         with:
-          url: ${{ vars.JENKINS_URL }}
-          username: ${{ secrets.JENKINS_USERNAME }}
-          token: ${{ secrets.JENKINS_TOKEN }}
-          job-name: ${{ vars.JENKINS_JOB }}
+          url: https://sda.preview.cb-demos.io/westest/
+          username: ${{ secrets.WES_JENKINS_USERNAME }}
+          token: ${{ secrets.WES_JENKINS_TOKEN }}
+          job-name: WesTestMB6/job/main/
       - name: Run GHA Workflow
-        kind: test
         uses: cloudbees-io/ghactions-run-workflow@v2
         continue-on-error: true
         with:
-          token: ${{ secrets.GH_TOKEN }}
-          org-name: ORG_NAME
-          repo-name: PROJECT_NAME
+          token: ${{ secrets.WES_GH_TOKEN }}
+          org-name: cloudbees-days
+          repo-name: hackers-WesTest1019
           branch-name: main
-          workflow-name: test-and-build-image
+          workflow-name: test-and-build-image2
           test-type: JUnit
           test-result-location: junit.xml
       - name: Get source code
@@ -65,8 +64,7 @@ jobs:
     outputs:
       CODE_COVERAGE: ${{ steps.RunUnitTest.outputs.CODE_COVERAGE }}
   build-container-image:
-    outputs:
-      artifact-id: ${{ fromJSON(steps.build-image.outputs.artifact-ids)[ format('index.docker.io/{0}/hackers-organized:{1}', vars.DOCKER_USER, cloudbees.scm.sha) ] }}
+    needs: test
     steps:
       - uses: cloudbees-io/checkout@v1
         name: Get source code
@@ -78,35 +76,42 @@ jobs:
         id: dockerconfig
         with:
           registry: https://index.docker.io/v1/
-          username: ${{ vars.DOCKER_USER }}
-          password: ${{ secrets.DOCKER_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_USER }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - uses: cloudbees-io/kaniko@v1
         name: Build container image
-        id: build-image
         kind: build
         with:
-          destination: index.docker.io/${{ vars.DOCKER_USER }}/hackers-organized:${{ cloudbees.scm.sha }}
+          destination: ${{ secrets.DOCKERHUB_USER }}/hackers-organized:${{ cloudbees.scm.sha }}
           tar-path: container-image.tar
           build-args: BUILDKIT_CONTEXT_KEEP_GIT_DIR=1,BUILDKIT_INLINE_CACHE=1
-      - uses: cloudbees-io/asset-chain-utils/upload-binary@v1
+      - uses: cloudbees-io/asset-chain-utils-preprod/upload-binary@v1
         name: Upload binary from container build
-        continue-on-error: true
         id: upload-binary
         with:
           file-path: container-image.tar
           file-type: BINARY_CONTAINER
           debug: "true"
+      - name: Register build artifact
+        id: register-artifact
+        uses: cloudbees-io/register-build-artifact@v2
+        with:
+          name: "ldonleycb/hackers-organized"
+          version: "${{ cloudbees.scm.sha }}"
+          url: "${{ secrets.DOCKERHUB_USER }}/hackers-organized:${{ cloudbees.scm.sha }}"
       - name: Publish evidence
         uses: cloudbees-io/publish-evidence-item@v1
         with:
           content: |-
             ## Built and pushed image to docker hub
 
-            [Docker Hub](https://hub.docker.com/repository/docker/${{ vars.DOCKER_USER }}/hackers-organized/tags)
+            [Docker Hub](https://hub.docker.com/repository/docker/ldonleycb/hackers-organized/tags)
 
-            Deployed hackers-organized:${{ cloudbees.scm.sha }}
+            **Artifact ID:** ${{ steps.register-artifact.outputs.artifact-id }}
+            **Image:** hackers-organized:${{ cloudbees.scm.sha }}
           format: MARKDOWN
-    needs: test
+    outputs:
+      ARTIFACT_ID: ${{ steps.register-artifact.outputs.artifact-id }}
   scan:
     outputs:
       BLOCKER_COUNT: ${{ steps.FetchSonarQubeIssues.outputs.BLOCKER_COUNT }}
@@ -243,7 +248,7 @@ jobs:
           # Dynamic CloudBees context variables
           COMPONENT_ID="${{ cloudbees.component.id }}"
           ORG_ID="${{ cloudbees.org.id }}"
-          ENDPOINT_ID="REPLACE_ME_ENDPOINT_ID"
+          ENDPOINT_ID="e8c14f62-66e8-4846-a077-3b9a887a7255"
           BRANCH_NAME="${{ cloudbees.scm.branch }}"
 
           echo "🔍 Using component: $COMPONENT_ID"
@@ -254,7 +259,7 @@ jobs:
           echo "✅ CloudBees Unify API URL: $API_URL"
 
           # Make vulnerability API call
-          RESPONSE=$(curl -s -H "Authorization: Bearer ${{ secrets.UNIFY_API_TOKEN }}" \
+          RESPONSE=$(curl -s -H "Authorization: Bearer ${{ secrets.CLOUDBEES_API_TOKEN }}" \
           "${API_URL}?pagination.sort.order=1&pagination.sort.field_name=severity&pagination.page_length=100&pagination.page=1&triageStatus=UNREVIEWED")
 
           # Validate API response
@@ -432,7 +437,7 @@ jobs:
           # Dynamic CloudBees context variables (same as security-check)
           COMPONENT_ID="${{ cloudbees.component.id }}"
           ORG_ID="${{ cloudbees.org.id }}"
-          ENDPOINT_ID="REPLACE_ME_ENDPOINT_ID"
+          ENDPOINT_ID="e8c14f62-66e8-4846-a077-3b9a887a7255"
           BRANCH_NAME="${{ cloudbees.scm.branch }}"
 
           # Build API URL with branch name
@@ -452,7 +457,7 @@ jobs:
             echo "🔍 Enhanced Dual-Threshold Security Poll #${POLL_COUNT}/7 (${ELAPSED_MIN}:00 elapsed)"
 
             # Make API call to check current vulnerability counts
-            RESPONSE=$(curl -s -H "Authorization: Bearer ${{ secrets.UNIFY_API_TOKEN }}" \
+            RESPONSE=$(curl -s -H "Authorization: Bearer ${{ secrets.CLOUDBEES_API_TOKEN }}" \
             "${API_URL}?pagination.sort.order=1&pagination.sort.field_name=severity&pagination.page_length=100&pagination.page=1&triageStatus=UNREVIEWED")
 
             # Extract current counts
@@ -559,43 +564,38 @@ jobs:
             **Result:** ${{ steps.security-polling.outputs.gate_status == 'PASSED' && 'Enhanced security standards met - deployment approved' || 'Enhanced security standards not met - deployment blocked' }}
           format: MARKDOWN
   deploy:
-    environment: "REPLACE_ME_ENV"
+    environment: DOW Production
     steps:
       - name: Checkout
         uses: cloudbees-io/checkout@v1
       - uses: cloudbees-days/setup-kubeconfig
         name: Set kubeconfig
         with:
-          kubeconfig: ${{ secrets.KUBECONFIG }}
-      - id: install-chart
-        name: Install helm chart
-        uses: cloudbees-io/helm-install@v1
+          kubeconfig: ${{ secrets.kubeconfig }}
+      - name: Deploy to cluster
+        uses: cloudbees-io/kustomize-deploy@v1
+        kind: deploy
         with:
-          chart-location: ${{ cloudbees.workspace }}/chart
-          release-name: PROJECT_NAME
-          namespace: ${{ vars.namespace }}
-          values: |
-            image:
-              repository: ${{ vars.DOCKER_USER }}/hackers-organized
-              tag: ${{ cloudbees.scm.sha }}
-            fmKey: ${{ vars.FM_TOKEN }}
-            useVPC: REPLACE_ME_USE_VPC
-            fmInstance: REPLACE_ME_FM_INSTANCE
-            hostname: PROJECT_NAME.REPLACE_ME_ENV.preview.cb-demos.io
+          kustomization-base-dir: ${{ cloudbees.workspace }}/k8s/base
+          kustomization-overlays-dir: ${{ cloudbees.workspace }}/k8s/overlays/prod
+          environment-variables: "{}"
       - name: Publish evidence
         uses: cloudbees-io/publish-evidence-item@v1
         with:
           content: |-
             ## Deployed environment
-            [Production frontend](https://PROJECT_NAME.REPLACE_ME_ENV.preview.cb-demos.io/)
+            [Production frontend](https://hackers-organized-prod.preview.cb-demos.io/)
 
             Running hackers-organized:${{ cloudbees.scm.sha }}
+            **Artifact ID:** ${{ needs.build-container-image.outputs.ARTIFACT_ID }}
           format: MARKDOWN
-      - name: Register_deployed_artifact
-        uses: https://github.com/cloudbees-io/register-deployed-artifact@v2
+      - name: Register deployed artifact
+        uses: cloudbees-io/register-deployed-artifact@v2
         with:
-          artifact-id: ${{ needs.build-container-image.outputs.artifact-id }}
-          target-environment: "REPLACE_ME_ENV"
+          artifact-id: ${{ needs.build-container-image.outputs.ARTIFACT_ID }}
+          target-environment: "DOW Production"
     needs:
-      - security-gate
       - build-container-image
+      - scan
+      - security-check
+      - security-gate
